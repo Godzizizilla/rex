@@ -28,6 +28,7 @@ type inputMode int
 const (
 	inputNormal inputMode = iota
 	inputReject
+	inputWhitelist // multi-select sub-commands for whitelisting
 )
 
 // eventMsg wraps a daemon event as a tea.Msg.
@@ -50,6 +51,11 @@ type Model struct {
 	lastActivity time.Time
 	message      string // transient status message
 	messageTime  time.Time
+
+	// Whitelist multi-select state
+	wlTarget   int    // request ID being whitelisted
+	wlCursor   int    // cursor within sub-command list
+	wlSelected []bool // which sub-commands are selected
 }
 
 // NewModel creates a new TUI model.
@@ -121,6 +127,11 @@ func (m *Model) handleEvent(e daemon.Event) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// Handle whitelist multi-select mode
+	if m.inputMode == inputWhitelist {
+		return m.handleWhitelistKey(key)
+	}
 
 	// Handle reject input mode
 	if m.inputMode == inputReject {
@@ -211,13 +222,77 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		if m.viewMode == viewPending {
 			if req := m.selectedRequest(); req != nil && req.Status == protocol.StatusPending {
-				if err := m.daemon.AddWhitelistAndApprove(req.ID); err != nil {
-					m.setMessage(fmt.Sprintf("Error: %v", err))
-				} else {
-					m.setMessage(fmt.Sprintf("Whitelisted & approved #%d", req.ID))
-				}
+				m.enterWhitelistMode(req)
 			}
 		}
+	}
+	return m, nil
+}
+
+func (m *Model) enterWhitelistMode(req *protocol.Request) {
+	m.inputMode = inputWhitelist
+	m.wlTarget = req.ID
+	m.wlCursor = 0
+
+	// Pre-select sub-commands that are NOT already whitelisted
+	m.wlSelected = make([]bool, len(req.SubCommands))
+	if req.WLResult != nil {
+		for i, match := range req.WLResult.SubCommands {
+			m.wlSelected[i] = !match.Matched // select those not yet whitelisted
+		}
+	} else {
+		for i := range m.wlSelected {
+			m.wlSelected[i] = true
+		}
+	}
+}
+
+func (m Model) handleWhitelistKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.inputMode = inputNormal
+
+	case "up", "k":
+		if m.wlCursor > 0 {
+			m.wlCursor--
+		}
+	case "down", "j":
+		if m.wlCursor < len(m.wlSelected)-1 {
+			m.wlCursor++
+		}
+
+	case " ":
+		if m.wlCursor < len(m.wlSelected) {
+			m.wlSelected[m.wlCursor] = !m.wlSelected[m.wlCursor]
+		}
+
+	case "a":
+		allSelected := true
+		for _, s := range m.wlSelected {
+			if !s {
+				allSelected = false
+				break
+			}
+		}
+		for i := range m.wlSelected {
+			m.wlSelected[i] = !allSelected
+		}
+
+	case "enter":
+		// Collect selected indices
+		var indices []int
+		for i, sel := range m.wlSelected {
+			if sel {
+				indices = append(indices, i)
+			}
+		}
+		if err := m.daemon.AddWhitelistAndApprove(m.wlTarget, indices); err != nil {
+			m.setMessage(fmt.Sprintf("Error: %v", err))
+		} else {
+			count := len(indices)
+			m.setMessage(fmt.Sprintf("Whitelisted %d cmd(s) & approved #%d", count, m.wlTarget))
+		}
+		m.inputMode = inputNormal
 	}
 	return m, nil
 }
@@ -288,7 +363,6 @@ func (m Model) View() string {
 				maxItems = 1
 			}
 			if len(visibleItems) > maxItems {
-				// Ensure cursor is visible
 				start := 0
 				if m.cursor >= maxItems {
 					start = m.cursor - maxItems + 1
@@ -307,7 +381,6 @@ func (m Model) View() string {
 
 		for i, req := range visibleItems {
 			actualIdx := i
-			// Adjust if we sliced
 			if len(items) > len(visibleItems) {
 				start := 0
 				maxItems := contentHeight / 3
@@ -338,9 +411,72 @@ func (m Model) View() string {
 		b.WriteString("█\n")
 	}
 
+	// Whitelist multi-select overlay
+	if m.inputMode == inputWhitelist {
+		b.WriteString("\n")
+		b.WriteString(m.viewWhitelistSelect())
+	}
+
 	// Footer
 	b.WriteString("\n")
 	b.WriteString(m.viewFooter())
+
+	return b.String()
+}
+
+func (m Model) viewWhitelistSelect() string {
+	var req *protocol.Request
+	for _, r := range m.daemon.Requests() {
+		if r.ID == m.wlTarget {
+			req = r
+			break
+		}
+	}
+	if req == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(inputPromptStyle.Render(fmt.Sprintf("  Whitelist + Approve #%d", m.wlTarget)))
+	b.WriteString("\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render("  Select sub-commands to add to whitelist:"))
+	b.WriteString("\n\n")
+
+	for i, sub := range req.SubCommands {
+		cursor := "  "
+		if i == m.wlCursor {
+			cursor = selectedStyle.Render("> ")
+		}
+
+		checkbox := "[ ]"
+		if i < len(m.wlSelected) && m.wlSelected[i] {
+			checkbox = lipgloss.NewStyle().Foreground(colorSuccess).Render("[x]")
+		}
+
+		// Show the glob pattern that will be added
+		pattern := sub.GlobPattern()
+
+		// Mark already-whitelisted commands
+		alreadyWL := ""
+		if req.WLResult != nil && i < len(req.WLResult.SubCommands) && req.WLResult.SubCommands[i].Matched {
+			alreadyWL = lipgloss.NewStyle().Foreground(colorMuted).Render(" (already whitelisted)")
+		}
+
+		// Show operator before command if not the first
+		prefix := ""
+		if sub.Operator != "" {
+			prefix = lipgloss.NewStyle().Foreground(colorMuted).Render(sub.Operator+" ") + " "
+		}
+
+		b.WriteString(fmt.Sprintf("  %s %s %s%s  %s%s\n",
+			cursor,
+			checkbox,
+			prefix,
+			cmdStyle.Render(sub.Raw),
+			lipgloss.NewStyle().Foreground(colorMuted).Render("→ "+pattern),
+			alreadyWL,
+		))
+	}
 
 	return b.String()
 }
@@ -372,10 +508,17 @@ func (m Model) viewHeader() string {
 
 func (m Model) viewFooter() string {
 	var keys string
-	if m.viewMode == viewPending {
-		keys = "[a]pprove  [r]eject  [w]hitelist+approve  [enter]detail  [tab]history  [q]uit"
-	} else {
-		keys = "[enter]detail  [tab]pending  [q]uit"
+	switch m.inputMode {
+	case inputWhitelist:
+		keys = "[space]toggle  [a]toggle all  [enter]confirm  [esc]cancel"
+	case inputReject:
+		keys = "[enter]confirm  [esc]cancel"
+	default:
+		if m.viewMode == viewPending {
+			keys = "[a]pprove  [r]eject  [w]hitelist+approve  [enter]detail  [tab]history  [q]uit"
+		} else {
+			keys = "[enter]detail  [tab]pending  [q]uit"
+		}
 	}
 	return helpStyle.Render("  " + keys)
 }
@@ -468,6 +611,26 @@ func (m Model) viewDetail() string {
 			detailLabelStyle.Render(f.label),
 			detailValueStyle.Render(f.value),
 		))
+	}
+
+	// Show sub-commands breakdown
+	if len(req.SubCommands) > 1 {
+		b.WriteString("\n")
+		b.WriteString(detailLabelStyle.Render("  Sub-cmds:"))
+		b.WriteString("\n")
+		for i, sub := range req.SubCommands {
+			prefix := "  "
+			if sub.Operator != "" {
+				prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("  " + sub.Operator + " ")
+			}
+			wlStatus := ""
+			if req.WLResult != nil && i < len(req.WLResult.SubCommands) {
+				if req.WLResult.SubCommands[i].Matched {
+					wlStatus = statusApprovedStyle.Render(" [WL]")
+				}
+			}
+			b.WriteString(fmt.Sprintf("  %s%s%s\n", prefix, cmdStyle.Render(sub.Raw), wlStatus))
+		}
 	}
 
 	if req.Output != "" {

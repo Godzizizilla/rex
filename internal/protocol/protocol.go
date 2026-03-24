@@ -1,6 +1,10 @@
 package protocol
 
-import "time"
+import (
+	"time"
+
+	"rex/internal/config"
+)
 
 // Request status constants.
 const (
@@ -22,17 +26,19 @@ const (
 
 // Request represents a command execution request from the agent.
 type Request struct {
-	ID        int       `json:"id"`
-	Server    string    `json:"server"`
-	Host      string    `json:"host"`
-	Command   string    `json:"command"`
-	Desc      string    `json:"desc"`
-	Timeout   int       `json:"timeout"`
-	Status    string    `json:"status"`
-	Output    string    `json:"output"`
-	ExitCode  int       `json:"exit_code"`
-	Feedback  string    `json:"feedback"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          int                      `json:"id"`
+	Server      string                   `json:"server"`
+	Host        string                   `json:"host"`
+	Command     string                   `json:"command"`
+	Desc        string                   `json:"desc"`
+	Timeout     int                      `json:"timeout"`
+	Status      string                   `json:"status"`
+	Output      string                   `json:"output"`
+	ExitCode    int                      `json:"exit_code"`
+	Feedback    string                   `json:"feedback"`
+	CreatedAt   time.Time                `json:"created_at"`
+	SubCommands []config.SubCommand      `json:"-"` // parsed sub-commands
+	WLResult    *config.WhitelistResult  `json:"-"` // per-subcommand whitelist match
 }
 
 // --- Messages over Unix socket (NDJSON) ---

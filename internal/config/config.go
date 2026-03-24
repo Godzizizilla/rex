@@ -91,13 +91,42 @@ func (c *Config) ResolveServer(alias string) (*ServerConfig, error) {
 	return &srv, nil
 }
 
-// MatchWhitelist checks if a command matches any whitelist rule for the given server.
-func (c *Config) MatchWhitelist(server, command string) (bool, string) {
+// SubCommandMatch holds the whitelist match result for a single sub-command.
+type SubCommandMatch struct {
+	Sub     SubCommand
+	Matched bool
+	Rule    string // matched rule note, if any
+}
+
+// WhitelistResult holds the full whitelist evaluation for a compound command.
+type WhitelistResult struct {
+	AllMatched  bool
+	SubCommands []SubCommandMatch
+}
+
+// MatchWhitelist parses the command into sub-commands and checks each against the whitelist.
+func (c *Config) MatchWhitelist(server, command string) WhitelistResult {
+	subs := ParseCommand(command)
+	result := WhitelistResult{AllMatched: true}
+
+	for _, sub := range subs {
+		m := SubCommandMatch{Sub: sub}
+		m.Matched, m.Rule = c.matchSingleCommand(server, sub.Raw)
+		if !m.Matched {
+			result.AllMatched = false
+		}
+		result.SubCommands = append(result.SubCommands, m)
+	}
+	return result
+}
+
+// matchSingleCommand checks one sub-command against all whitelist rules.
+func (c *Config) matchSingleCommand(server, cmd string) (bool, string) {
 	for _, rule := range c.Whitelist {
 		if !matchServers(rule.Servers, server) {
 			continue
 		}
-		if globMatch(rule.Pattern, command) {
+		if globMatch(rule.Pattern, cmd) {
 			return true, rule.Note
 		}
 	}
