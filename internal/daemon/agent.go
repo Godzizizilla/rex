@@ -216,6 +216,18 @@ func (d *Daemon) run(c *agentConn, e *entry) {
 	}()
 
 	d.setRunning(e)
+	if e.req.Kind == protocol.KindForward {
+		f, err := d.startForward(e)
+		if err != nil {
+			d.finish(e, protocol.StatusFailed, protocol.ExitRexError, err.Error())
+			c.fail("%v", err)
+			return
+		}
+		d.finish(e, protocol.StatusCompleted, 0, "")
+		c.send(protocol.AgentResp{Type: protocol.RespResult, ID: e.req.ID, Result: f})
+		return
+	}
+
 	out := func(stream string, p []byte) {
 		d.appendOutput(e, p)
 		c.send(protocol.AgentResp{Type: protocol.RespOutput, Stream: stream, Data: p})
@@ -227,7 +239,7 @@ func (d *Daemon) run(c *agentConn, e *entry) {
 	case protocol.KindExec:
 		code, err = d.runExec(ctx, e, out)
 	default:
-		code, err = d.runExtra(ctx, c, e, out)
+		code, err = d.runTransfer(ctx, e, out)
 	}
 
 	switch {

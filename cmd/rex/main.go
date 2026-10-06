@@ -127,6 +127,3 @@ func exitCode(code int) error {
 	}
 	return errExit(code)
 }
-
-// addCommands registers the subcommands (cp, forward, servers, policy, skill).
-func addCommands(root *cobra.Command) {}
