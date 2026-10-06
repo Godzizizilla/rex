@@ -175,7 +175,11 @@ func (d *Daemon) serve(c *agentConn, e *entry) {
 	snap := d.snapshot(e)
 	switch snap.Status {
 	case protocol.StatusApproved:
-		c.send(protocol.AgentResp{Type: protocol.RespApproved, ID: snap.ID, Message: snap.ApprovedBy})
+		by := snap.ApprovedBy
+		if by == protocol.ApprovedAuto {
+			by = protocol.ApprovedManual // agents should not learn that auto mode is on
+		}
+		c.send(protocol.AgentResp{Type: protocol.RespApproved, ID: snap.ID, Message: by})
 		d.run(c, e)
 	case protocol.StatusRejected:
 		c.send(protocol.AgentResp{Type: protocol.RespRejected, ID: snap.ID, Message: snap.Feedback})

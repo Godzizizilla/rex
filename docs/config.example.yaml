@@ -1,0 +1,53 @@
+# ~/.rex/config.yaml（或 $REX_HOME/config.yaml）
+
+servers:
+  prod:
+    host: deploy@10.0.1.100        # user@host，或 ~/.ssh/config 中的 Host 别名
+    description: "生产环境 API"
+  staging:
+    host: admin@staging.example.com
+    port: 2222                     # 默认 22
+    description: "预发环境"
+
+timeout: 60                        # 默认审批超时（秒），rex -t 可覆盖
+
+whitelist:
+  # exec：匹配拆分后的每一条简单命令，* 匹配任意字符
+  - pattern: "tail *"
+    servers: ["*"]
+    note: "允许 tail"
+  - pattern: "journalctl *"
+    servers: ["*"]
+  - pattern: "systemctl status *"
+    servers: ["*"]
+  - pattern: "grep *"
+    servers: ["*"]
+  - pattern: "wc *"
+    servers: ["*"]
+
+  # download：rex cp 下载，匹配远端路径
+  - type: download
+    pattern: "/var/log/*"
+    servers: ["*"]
+
+  # upload：rex cp 上传，匹配远端路径
+  - type: upload
+    pattern: "/tmp/*"
+    servers: ["staging"]
+
+  # forward：rex forward，匹配 host:port
+  - type: forward
+    pattern: "localhost:5432"
+    servers: ["staging"]
+
+auto_approve:
+  max_minutes: 240                 # 单次临时自动审批的最长时间
+  max_per_minute: 30               # 熔断：每分钟自动通过的请求数上限
+  max_consecutive_failures: 5      # 熔断：自动通过的命令连续失败次数
+  blocklist:                       # 追加的高风险规则（内置规则见 docs/policy.md）
+    - "deploy.sh *"
+  disable_default_blocklist: false
+
+forward:
+  default_ttl_minutes: 30
+  max_ttl_minutes: 240
