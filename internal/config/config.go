@@ -25,10 +25,10 @@ type ServerConfig struct {
 }
 
 type WhitelistRule struct {
-	Type    string   `yaml:"type,omitempty"` // exec (default), download, upload, forward
-	Pattern string   `yaml:"pattern"`        // glob pattern, * matches anything
-	Servers []string `yaml:"servers"`        // server aliases (["*"] for all)
-	Note    string   `yaml:"note,omitempty"` // human-readable note
+	Type    string   `yaml:"type,omitempty" json:"type,omitempty"` // exec (default), download, upload, forward
+	Pattern string   `yaml:"pattern" json:"pattern"`               // glob pattern, * matches anything
+	Servers []string `yaml:"servers" json:"servers"`               // server aliases (["*"] for all)
+	Note    string   `yaml:"note,omitempty" json:"note,omitempty"` // human-readable note
 }
 
 // Kind returns the normalized rule type.
