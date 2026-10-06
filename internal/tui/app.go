@@ -10,6 +10,7 @@ import (
 
 	"rex/internal/daemon"
 	"rex/internal/notify"
+	"rex/internal/policy"
 	"rex/internal/protocol"
 )
 
@@ -235,10 +236,10 @@ func (m *Model) enterWhitelistMode(req *protocol.Request) {
 	m.wlCursor = 0
 
 	// Pre-select sub-commands that are NOT already whitelisted
-	m.wlSelected = make([]bool, len(req.SubCommands))
-	if req.WLResult != nil {
-		for i, match := range req.WLResult.SubCommands {
-			m.wlSelected[i] = !match.Matched // select those not yet whitelisted
+	m.wlSelected = make([]bool, len(req.Eval.Commands))
+	if req.Eval != nil {
+		for i, c := range req.Eval.Commands {
+			m.wlSelected[i] = !c.Whitelisted // select those not yet whitelisted
 		}
 	} else {
 		for i := range m.wlSelected {
@@ -442,7 +443,7 @@ func (m Model) viewWhitelistSelect() string {
 	b.WriteString(lipgloss.NewStyle().Foreground(colorMuted).Render("  Select sub-commands to add to whitelist:"))
 	b.WriteString("\n\n")
 
-	for i, sub := range req.SubCommands {
+	for i, sub := range req.Eval.Commands {
 		cursor := "  "
 		if i == m.wlCursor {
 			cursor = selectedStyle.Render("> ")
@@ -454,18 +455,18 @@ func (m Model) viewWhitelistSelect() string {
 		}
 
 		// Show the glob pattern that will be added
-		pattern := sub.GlobPattern()
+		pattern := policy.GlobPattern(sub)
 
 		// Mark already-whitelisted commands
 		alreadyWL := ""
-		if req.WLResult != nil && i < len(req.WLResult.SubCommands) && req.WLResult.SubCommands[i].Matched {
+		if sub.Whitelisted {
 			alreadyWL = lipgloss.NewStyle().Foreground(colorMuted).Render(" (already whitelisted)")
 		}
 
 		// Show operator before command if not the first
 		prefix := ""
-		if sub.Operator != "" {
-			prefix = lipgloss.NewStyle().Foreground(colorMuted).Render(sub.Operator+" ") + " "
+		if sub.Op != "" {
+			prefix = lipgloss.NewStyle().Foreground(colorMuted).Render(sub.Op+" ") + " "
 		}
 
 		b.WriteString(fmt.Sprintf("  %s %s %s%s  %s%s\n",
@@ -614,18 +615,18 @@ func (m Model) viewDetail() string {
 	}
 
 	// Show sub-commands breakdown
-	if len(req.SubCommands) > 1 {
+	if len(req.Eval.Commands) > 1 {
 		b.WriteString("\n")
 		b.WriteString(detailLabelStyle.Render("  Sub-cmds:"))
 		b.WriteString("\n")
-		for i, sub := range req.SubCommands {
+		for _, sub := range req.Eval.Commands {
 			prefix := "  "
-			if sub.Operator != "" {
-				prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("  " + sub.Operator + " ")
+			if sub.Op != "" {
+				prefix = lipgloss.NewStyle().Foreground(colorMuted).Render("  " + sub.Op + " ")
 			}
 			wlStatus := ""
-			if req.WLResult != nil && i < len(req.WLResult.SubCommands) {
-				if req.WLResult.SubCommands[i].Matched {
+			{
+				if sub.Whitelisted {
 					wlStatus = statusApprovedStyle.Render(" [WL]")
 				}
 			}

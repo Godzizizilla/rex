@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"rex/internal/config"
+	"rex/internal/policy"
 	"rex/internal/protocol"
 )
 
@@ -145,23 +145,18 @@ func (d *Daemon) handleConn(conn net.Conn) {
 	id := int(d.nextID.Add(1))
 
 	// Parse sub-commands and check whitelist
-	wlResult := d.cfg.MatchWhitelist(msg.Server, msg.Command)
-	subs := make([]config.SubCommand, len(wlResult.SubCommands))
-	for i, m := range wlResult.SubCommands {
-		subs[i] = m.Sub
-	}
+	eval := policy.EvaluateExec(d.cfg, msg.Server, msg.Command, nil)
 
 	req := &protocol.Request{
-		ID:          id,
-		Server:      msg.Server,
-		Host:        srv.Host,
-		Command:     msg.Command,
-		Desc:        msg.Desc,
-		Timeout:     timeout,
-		Status:      protocol.StatusPending,
-		CreatedAt:   time.Now(),
-		SubCommands: subs,
-		WLResult:    &wlResult,
+		ID:        id,
+		Server:    msg.Server,
+		Host:      srv.Host,
+		Command:   msg.Command,
+		Desc:      msg.Desc,
+		Timeout:   timeout,
+		Status:    protocol.StatusPending,
+		CreatedAt: time.Now(),
+		Eval:      eval,
 	}
 
 	d.mu.Lock()
@@ -170,17 +165,8 @@ func (d *Daemon) handleConn(conn net.Conn) {
 	d.mu.Unlock()
 
 	// Auto-approve if ALL sub-commands match whitelist
-	if wlResult.AllMatched {
-		notes := make([]string, 0)
-		for _, m := range wlResult.SubCommands {
-			if m.Rule != "" {
-				notes = append(notes, m.Rule)
-			}
-		}
-		note := ""
-		if len(notes) > 0 {
-			note = strings.Join(notes, "; ")
-		}
+	if eval.Whitelisted {
+		note := eval.Rule
 		d.sendMsg(conn, protocol.ServerMsg{Type: "auto_approved", ID: id, Data: note})
 		req.Status = protocol.StatusApproved
 		d.events <- Event{Type: "auto_approved", Request: req}
@@ -279,11 +265,11 @@ func (d *Daemon) AddWhitelistAndApprove(id int, selectedIndices []int) error {
 
 	// Add selected sub-commands to whitelist
 	for _, idx := range selectedIndices {
-		if idx < 0 || idx >= len(req.SubCommands) {
+		if idx < 0 || idx >= len(req.Eval.Commands) {
 			continue
 		}
-		sub := req.SubCommands[idx]
-		pattern := sub.GlobPattern()
+		sub := req.Eval.Commands[idx]
+		pattern := policy.GlobPattern(sub)
 
 		// Skip if this pattern already exists for this server
 		alreadyExists := false
@@ -300,7 +286,7 @@ func (d *Daemon) AddWhitelistAndApprove(id int, selectedIndices []int) error {
 		rule := config.WhitelistRule{
 			Pattern: pattern,
 			Servers: []string{req.Server},
-			Note:    fmt.Sprintf("added from TUI (#%d): %s", id, sub.Name()),
+			Note:    fmt.Sprintf("added from TUI (#%d): %s", id, sub.Name),
 		}
 		d.cfg.Whitelist = append(d.cfg.Whitelist, rule)
 	}

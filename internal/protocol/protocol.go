@@ -3,7 +3,7 @@ package protocol
 import (
 	"time"
 
-	"rex/internal/config"
+	"rex/internal/policy"
 )
 
 // Request status constants.
@@ -26,19 +26,18 @@ const (
 
 // Request represents a command execution request from the agent.
 type Request struct {
-	ID          int                      `json:"id"`
-	Server      string                   `json:"server"`
-	Host        string                   `json:"host"`
-	Command     string                   `json:"command"`
-	Desc        string                   `json:"desc"`
-	Timeout     int                      `json:"timeout"`
-	Status      string                   `json:"status"`
-	Output      string                   `json:"output"`
-	ExitCode    int                      `json:"exit_code"`
-	Feedback    string                   `json:"feedback"`
-	CreatedAt   time.Time                `json:"created_at"`
-	SubCommands []config.SubCommand      `json:"-"` // parsed sub-commands
-	WLResult    *config.WhitelistResult  `json:"-"` // per-subcommand whitelist match
+	ID        int                `json:"id"`
+	Server    string             `json:"server"`
+	Host      string             `json:"host"`
+	Command   string             `json:"command"`
+	Desc      string             `json:"desc"`
+	Timeout   int                `json:"timeout"`
+	Status    string             `json:"status"`
+	Output    string             `json:"output"`
+	ExitCode  int                `json:"exit_code"`
+	Feedback  string             `json:"feedback"`
+	CreatedAt time.Time          `json:"created_at"`
+	Eval      *policy.Evaluation `json:"-"` // policy verdict
 }
 
 // --- Messages over Unix socket (NDJSON) ---
@@ -54,7 +53,7 @@ type ClientMsg struct {
 
 // ServerMsg is sent from the daemon to rex CLI.
 type ServerMsg struct {
-	Type     string `json:"type"`               // queued, auto_approved, approved, output, completed, rejected, timeout, error
+	Type     string `json:"type"`                // queued, auto_approved, approved, output, completed, rejected, timeout, error
 	ID       int    `json:"id,omitempty"`        // request ID
 	Data     string `json:"data,omitempty"`      // output data or error message
 	Stream   string `json:"stream,omitempty"`    // stdout or stderr
