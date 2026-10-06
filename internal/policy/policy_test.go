@@ -66,6 +66,7 @@ func TestWhitelist(t *testing.T) {
 		{"prod", "cat /etc/hosts", true},
 		{"staging", "cat /etc/hosts", false}, // rule limited to prod
 		{"prod", "tail a.log | sort", false},
+		{"prod", "tail a.log | wc", true}, // "wc *" covers a bare "wc"
 		// bypasses of the old operator splitter
 		{"prod", "tail a\nrm -rf /tmp/x", false},
 		{"prod", "tail a & rm -rf /tmp/x", false},

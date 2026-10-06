@@ -1,151 +1,132 @@
+// rex runs commands on remote servers after human approval, with an
+// interface modelled on ssh:
+//
+//	rex -d "why" prod -- tail -n 100 /var/log/app.log
+//
+// On success rex prints exactly what the remote command printed and exits
+// with its exit code. When rex itself fails (rejected, approval timeout,
+// rexd unreachable) it prints "rex: ..." on stderr and exits with 255.
 package main
 
 import (
-	"bufio"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/spf13/cobra"
 
-	"rex/internal/config"
 	"rex/internal/protocol"
 )
 
 var (
-	flagServer  string
 	flagDesc    string
-	flagCmd     string
 	flagTimeout int
+	flagVerbose bool
+
+	flagNoStdin bool
+	flagServer  string // legacy -s
+	flagCmd     string // legacy -c
 )
 
 func main() {
-	rootCmd := &cobra.Command{
-		Use:   "rex",
-		Short: "Remote command execution gateway for coding agents",
-		Long: `Rex submits remote commands for human approval before execution.
-Commands are reviewed in the rexd TUI before being executed on remote servers.`,
-		RunE: run,
+	root := &cobra.Command{
+		Use:   "rex [flags] <server> -- <command...>",
+		Short: "Run commands on remote servers after human approval",
+		Long: `rex submits a remote command to rexd (Rex.app) for human approval and runs it over ssh.
+
+Whitelisted commands run immediately. Everything else waits until a human
+approves or rejects it in Rex.app, or until the approval timeout expires.
+
+Output and exit code are those of the remote command, like ssh. If rex itself
+fails (rejected, approval timeout, rexd not running) it prints "rex: <reason>"
+on stderr and exits with 255.`,
+		Example: `  rex -d "check recent errors" prod -- tail -n 100 /var/log/app.log
+  rex -d "count 5xx" prod -- 'grep " 5[0-9][0-9] " /var/log/nginx/access.log | wc -l'
+  cat migrate.sql | rex -d "apply migration 042" prod -- psql app`,
+		Args:          cobra.ArbitraryArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          runExec,
 	}
+	pf := root.PersistentFlags()
+	pf.StringVarP(&flagDesc, "desc", "d", "", "what this does and why, shown to the reviewer (required)")
+	pf.IntVarP(&flagTimeout, "timeout", "t", 0, "approval timeout in seconds (default from config)")
+	pf.BoolVarP(&flagVerbose, "verbose", "v", false, "print progress (queued/approved) on stderr")
 
-	rootCmd.Flags().StringVarP(&flagServer, "server", "s", "", "Server alias (required, defined in ~/.rex/config.yaml)")
-	rootCmd.Flags().StringVarP(&flagDesc, "desc", "d", "", "Command description - what this command does and why (required)")
-	rootCmd.Flags().StringVarP(&flagCmd, "cmd", "c", "", "Remote command to execute (required)")
-	rootCmd.Flags().IntVarP(&flagTimeout, "timeout", "t", 0, "Approval timeout in seconds (default: from config)")
+	f := root.Flags()
+	f.BoolVarP(&flagNoStdin, "no-stdin", "n", false, "do not forward stdin to the remote command")
+	f.StringVarP(&flagServer, "server", "s", "", "server alias (legacy form of the positional argument)")
+	f.StringVarP(&flagCmd, "cmd", "c", "", "remote command (legacy form of the arguments after --)")
 
-	rootCmd.MarkFlagRequired("server")
-	rootCmd.MarkFlagRequired("desc")
-	rootCmd.MarkFlagRequired("cmd")
+	addCommands(root)
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+	err := root.Execute()
+	var code errExit
+	switch {
+	case err == nil:
+	case errors.As(err, &code):
+		os.Exit(int(code))
+	default:
+		fmt.Fprintf(os.Stderr, "rex: %v\n", err)
+		os.Exit(protocol.ExitRexError)
 	}
 }
 
-func run(cmd *cobra.Command, args []string) error {
-	// Load config to validate server alias
-	cfg, err := config.Load()
+func runExec(cmd *cobra.Command, args []string) error {
+	server := flagServer
+	if server == "" {
+		if len(args) == 0 || cmd.ArgsLenAtDash() == 0 {
+			return errors.New("usage: rex -d <description> <server> -- <command...>  (see rex --help)")
+		}
+		server, args = args[0], args[1:]
+	}
+	command := flagCmd
+	if command == "" {
+		// Like ssh, multiple arguments are joined with spaces and interpreted
+		// by the remote shell.
+		command = strings.Join(args, " ")
+	} else if len(args) > 0 {
+		return errors.New("pass the command either with -c or after --, not both")
+	}
+	if strings.TrimSpace(command) == "" {
+		return errors.New("no command given: rex -d <description> <server> -- <command...>")
+	}
+	if strings.TrimSpace(flagDesc) == "" {
+		return errors.New("-d/--desc is required: describe what the command does and why")
+	}
+
+	var stdin []byte
+	if !flagNoStdin {
+		var err error
+		if stdin, err = readStdin(); err != nil {
+			return err
+		}
+	}
+
+	s, err := dial()
 	if err != nil {
 		return err
 	}
-	if _, err := cfg.ResolveServer(flagServer); err != nil {
-		return err
-	}
-
-	timeout := flagTimeout
-	if timeout <= 0 {
-		timeout = cfg.Timeout
-	}
-
-	// Connect to daemon
-	conn, err := net.DialTimeout("unix", config.SocketPath(), 3*time.Second)
-	if err != nil {
-		return fmt.Errorf("cannot connect to rexd (is it running?): %w\nStart it with: rexd", err)
-	}
-	defer conn.Close()
-
-	// Submit request
-	msg := protocol.ClientMsg{
-		Type:    "submit",
-		Server:  flagServer,
-		Command: flagCmd,
+	if err := s.send(protocol.AgentMsg{
+		Type:    protocol.AgentExec,
+		Server:  server,
+		Command: command,
 		Desc:    flagDesc,
-		Timeout: timeout,
-	}
-	data, err := json.Marshal(msg)
-	if err != nil {
+		Timeout: flagTimeout,
+		Stdin:   stdin,
+	}); err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	if _, err := conn.Write(data); err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-
-	// Read responses
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 256*1024), 10*1024*1024)
-
-	for scanner.Scan() {
-		var resp protocol.ServerMsg
-		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-			fmt.Fprintf(os.Stderr, "rex: invalid response from daemon\n")
-			continue
-		}
-
-		switch resp.Type {
-		case "queued":
-			fmt.Fprintf(os.Stderr, "[rex] Request #%d queued, waiting for approval...\n", resp.ID)
-
-		case "auto_approved":
-			note := resp.Data
-			if note != "" {
-				note = ": " + note
-			}
-			fmt.Fprintf(os.Stderr, "[rex] Auto-approved (whitelist%s)\n", note)
-
-		case "approved":
-			fmt.Fprintf(os.Stderr, "[rex] Approved, executing...\n")
-
-		case "output":
-			if resp.Stream == "stderr" {
-				fmt.Fprint(os.Stderr, resp.Data)
-			} else {
-				fmt.Print(resp.Data)
-			}
-
-		case "completed":
-			if resp.ExitCode != 0 {
-				fmt.Fprintf(os.Stderr, "[rex] Command exited with code %d\n", resp.ExitCode)
-			}
-			os.Exit(resp.ExitCode)
-
-		case "rejected":
-			feedback := resp.Feedback
-			if feedback == "" {
-				feedback = "no reason provided"
-			}
-			fmt.Fprintf(os.Stderr, "[rex] REJECTED: %s\n", feedback)
-			os.Exit(protocol.ExitRejected)
-
-		case "timeout":
-			fmt.Fprintf(os.Stderr, "[rex] Timed out waiting for approval\n")
-			os.Exit(protocol.ExitTimeout)
-
-		case "error":
-			fmt.Fprintf(os.Stderr, "[rex] Error: %s\n", resp.Data)
-			os.Exit(protocol.ExitInternal)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "[rex] Connection error: %v\n", err)
-		os.Exit(protocol.ExitConnErr)
-	}
-
-	// Connection closed unexpectedly
-	fmt.Fprintf(os.Stderr, "[rex] Connection closed\n")
-	os.Exit(protocol.ExitConnErr)
-	return nil
+	return exitCode(s.await(handlers{}))
 }
+
+func exitCode(code int) error {
+	if code == 0 {
+		return nil
+	}
+	return errExit(code)
+}
+
+// addCommands registers the subcommands (cp, forward, servers, policy, skill).
+func addCommands(root *cobra.Command) {}

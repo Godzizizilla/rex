@@ -135,7 +135,8 @@ func EvaluateTarget(cfg *config.Config, kind, server, target string) *Evaluation
 func matchRule(cfg *config.Config, kind, server, s string) *config.WhitelistRule {
 	for i := range cfg.Whitelist {
 		r := &cfg.Whitelist[i]
-		if r.Kind() == kind && r.AppliesTo(server) && globMatch(r.Pattern, s) {
+		// "name *" also covers the bare command "name".
+		if r.Kind() == kind && r.AppliesTo(server) && (globMatch(r.Pattern, s) || globMatch(r.Pattern, s+" ")) {
 			return r
 		}
 	}
