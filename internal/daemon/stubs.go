@@ -10,14 +10,6 @@ import (
 
 // Placeholders for features implemented in later commits.
 
-type autoMode struct{}
-
-func (autoMode) view() protocol.AutoState                               { return protocol.AutoState{} }
-func (d *Daemon) autoDecideLocked(*protocol.Request) (string, []string) { return "", nil }
-func (d *Daemon) autoObserve(protocol.Request)                          {}
-func (d *Daemon) autoStart(int, []string) error                         { return errors.New("not supported") }
-func (d *Daemon) autoStop(string)                                       {}
-
 type forward struct{ info protocol.Forward }
 
 func (d *Daemon) stopAllForwards()                                {}

@@ -43,6 +43,7 @@ type harness struct {
 	events chan protocol.ControlEvent
 	ctlW   io.WriteCloser
 	done   chan error
+	seen   []protocol.ControlEvent // received but not yet matched
 }
 
 func newHarness(t *testing.T, cfg *config.Config) *harness {
@@ -118,6 +119,13 @@ func (h *harness) control(cmd protocol.ControlCmd) {
 // waitEvent waits for an event of the given type matching pred.
 func (h *harness) waitEvent(typ string, pred func(protocol.ControlEvent) bool) protocol.ControlEvent {
 	h.t.Helper()
+	match := func(ev protocol.ControlEvent) bool { return ev.Type == typ && (pred == nil || pred(ev)) }
+	for i, ev := range h.seen {
+		if match(ev) {
+			h.seen = append(h.seen[:i], h.seen[i+1:]...)
+			return ev
+		}
+	}
 	timeout := time.After(10 * time.Second)
 	for {
 		select {
@@ -125,9 +133,10 @@ func (h *harness) waitEvent(typ string, pred func(protocol.ControlEvent) bool) p
 			if !ok {
 				h.t.Fatalf("control channel closed while waiting for %s", typ)
 			}
-			if ev.Type == typ && (pred == nil || pred(ev)) {
+			if match(ev) {
 				return ev
 			}
+			h.seen = append(h.seen, ev)
 		case <-timeout:
 			h.t.Fatalf("timed out waiting for %s event", typ)
 		}

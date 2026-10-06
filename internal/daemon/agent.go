@@ -190,12 +190,17 @@ func (d *Daemon) serve(c *agentConn, e *entry) {
 // it cannot), and why auto mode held it.
 func (d *Daemon) preDecision(e *entry) (string, []string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	ev := e.req.Eval
 	if ev != nil && ev.Whitelisted {
+		d.mu.Unlock()
 		return protocol.ApprovedWhitelist, nil
 	}
-	return d.autoDecideLocked(&e.req)
+	by, held := d.autoDecideLocked(&e.req)
+	d.mu.Unlock()
+	if by != "" || held != nil {
+		d.emitState() // auto mode counters changed
+	}
+	return by, held
 }
 
 // run executes an approved request and streams the result to the agent.
