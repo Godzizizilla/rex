@@ -313,7 +313,12 @@ extension Notification.Name {
 
 private struct SizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+    // Siblings that don't set the key (the Spacer below the island) report
+    // defaultValue; keep the non-zero size instead of letting them overwrite it.
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
 }
 
 /// The shape of the notch: square top, rounded bottom.
