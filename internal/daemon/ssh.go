@@ -36,6 +36,9 @@ func sshArgs(srv *config.ServerConfig, multiplex bool) []string {
 	if srv.Port != 0 && srv.Port != 22 {
 		args = append(args, "-p", fmt.Sprint(srv.Port))
 	}
+	if len(srv.JumpHosts) > 0 {
+		args = append(args, "-J", strings.Join(srv.JumpHosts, ","))
+	}
 	return args
 }
 

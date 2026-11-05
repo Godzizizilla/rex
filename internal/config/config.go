@@ -22,7 +22,39 @@ type ServerConfig struct {
 	Host        string `yaml:"host"`                  // user@hostname or an ~/.ssh/config alias
 	Port        int    `yaml:"port,omitempty"`        // SSH port (default 22)
 	Description string `yaml:"description,omitempty"` // human-readable description
+
+	// Jump lists bastion hops, in order. Each entry is "[user@]host[:port]" or
+	// "@name" to reference another configured server.
+	Jump StringList `yaml:"jump,omitempty"`
+
+	// JumpHosts is Jump with references expanded; filled by ResolveServer.
+	JumpHosts []string `yaml:"-"`
 }
+
+// StringList is a YAML scalar or sequence of strings.
+type StringList []string
+
+func (l *StringList) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := n.Decode(&s); err != nil {
+			return err
+		}
+		*l = StringList{s}
+		return nil
+	case yaml.SequenceNode:
+		var ss []string
+		if err := n.Decode(&ss); err != nil {
+			return err
+		}
+		*l = ss
+		return nil
+	}
+	return fmt.Errorf("line %d: expected a string or a list of strings", n.Line)
+}
+
+const maxJumpHops = 3
 
 type WhitelistRule struct {
 	Type    string   `yaml:"type,omitempty" json:"type,omitempty"` // exec (default), download, upload, forward
@@ -107,6 +139,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 	cfg.applyDefaults()
+	for _, name := range cfg.ServerNames() {
+		if _, err := cfg.ResolveServer(name); err != nil {
+			return nil, err
+		}
+	}
 	return &cfg, nil
 }
 
@@ -193,5 +230,55 @@ func (c *Config) ResolveServer(alias string) (*ServerConfig, error) {
 	if srv.Port == 0 {
 		srv.Port = 22
 	}
+	hops, err := c.resolveJump(alias, srv.Jump)
+	if err != nil {
+		return nil, err
+	}
+	srv.JumpHosts = hops
 	return &srv, nil
+}
+
+// resolveJump expands "@name" references into "[user@]host[:port]" hops. A
+// referenced server contributes its own jump chain first.
+func (c *Config) resolveJump(alias string, jump []string) ([]string, error) {
+	var hops []string
+	var expand func(owner string, jump []string, seen []string) error
+	expand = func(owner string, jump []string, seen []string) error {
+		for _, j := range jump {
+			j = strings.TrimSpace(j)
+			if j == "" || strings.HasPrefix(j, "-") || strings.ContainsAny(j, " \t,") {
+				return fmt.Errorf("server %q: invalid jump host %q", owner, j)
+			}
+			if !strings.HasPrefix(j, "@") {
+				hops = append(hops, j)
+				continue
+			}
+			ref := j[1:]
+			for _, s := range seen {
+				if s == ref {
+					return fmt.Errorf("server %q: jump loop through %q", alias, ref)
+				}
+			}
+			b, ok := c.Servers[ref]
+			if !ok {
+				return fmt.Errorf("server %q: jump references unknown server %q", owner, ref)
+			}
+			if err := expand(ref, b.Jump, append(seen, ref)); err != nil {
+				return err
+			}
+			host := b.Host
+			if b.Port != 0 && b.Port != 22 {
+				host = fmt.Sprintf("%s:%d", host, b.Port)
+			}
+			hops = append(hops, host)
+		}
+		return nil
+	}
+	if err := expand(alias, jump, []string{alias}); err != nil {
+		return nil, err
+	}
+	if len(hops) > maxJumpHops {
+		return nil, fmt.Errorf("server %q: too many jump hops (%d, max %d)", alias, len(hops), maxJumpHops)
+	}
+	return hops, nil
 }

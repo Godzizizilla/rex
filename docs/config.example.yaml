@@ -4,6 +4,10 @@ servers:
   prod:
     host: deploy@10.0.1.100        # user@host，或 ~/.ssh/config 中的 Host 别名
     description: "生产环境 API"
+  # 跳板机：jump 可写 user@host[:port]，或 "@别名" 引用另一台已配置的服务器；多跳用列表
+  # db:
+  #   host: root@172.16.16.9
+  #   jump: "@prod"
   staging:
     host: admin@staging.example.com
     port: 2222                     # 默认 22
