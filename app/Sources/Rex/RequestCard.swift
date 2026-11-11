@@ -14,11 +14,16 @@ struct RequestBody: View {
     var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: compact ? 10 : 8) {
             Text(request.desc)
                 .font(.system(size: compact ? 13 : 14, weight: .semibold))
+                .foregroundStyle(compact ? Color.white.opacity(0.92) : .primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+
+            if compact {
+                islandHairline
+            }
 
             switch request.kind {
             case "upload": uploadView
@@ -34,29 +39,51 @@ struct RequestBody: View {
     // MARK: exec
 
     @ViewBuilder private var execView: some View {
-        CodeBox(text: request.command ?? "", maxHeight: compact ? 110 : 220)
-        let cmds = request.eval?.commands ?? []
-        if cmds.count > 1 || cmds.contains(where: { $0.nested == true }) {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(cmds.enumerated()), id: \.offset) { _, c in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Circle().fill(color(for: c)).frame(width: 7, height: 7)
-                        if let op = c.op, !op.isEmpty {
-                            Text(op).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                        }
-                        Text(c.raw)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                        if c.nested == true {
-                            Text("嵌套").font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
+        if compact {
+            compactExecView
+        } else {
+            fullExecView
         }
+    }
+
+    private var fullExecView: some View {
+        Group {
+            CodeBox(text: request.command ?? "", maxHeight: 220)
+            let cmds = request.eval?.commands ?? []
+            if cmds.count > 1 || cmds.contains(where: { $0.nested == true }) {
+                commandBreakdown(cmds)
+            }
+            stdinSection
+        }
+    }
+
+    @ViewBuilder private var compactExecView: some View {
+        let cmds = request.eval?.commands ?? []
+        let showBreakdown = cmds.count > 1 || cmds.contains(where: { $0.nested == true })
+        VStack(alignment: .leading, spacing: 0) {
+            islandSectionHeader("完整命令", icon: "terminal")
+            CodeBox(text: request.command ?? "", maxHeight: 88)
+                .padding(.top, 6)
+            if showBreakdown {
+                islandHairline.padding(.vertical, 10)
+                islandSectionHeader("逐条策略", icon: "list.bullet.indent")
+                    .padding(.bottom, 6)
+                commandBreakdown(cmds)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.38)))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            }
+            stdinSection
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+    }
+
+    @ViewBuilder private var stdinSection: some View {
         if let size = request.stdinSize, size > 0 {
             VStack(alignment: .leading, spacing: 4) {
+                if compact { islandHairline.padding(.vertical, 10) }
                 Label("stdin \(Fmt.bytes(Int64(size)))", systemImage: "arrow.right.to.line")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -65,10 +92,44 @@ struct RequestBody: View {
         }
     }
 
+    private var islandHairline: some View {
+        Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+    }
+
+    private func islandSectionHeader(_ title: String, icon: String) -> some View {
+        Label(title, systemImage: icon)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.48))
+            .labelStyle(.titleAndIcon)
+            .symbolRenderingMode(.hierarchical)
+    }
+
     private func color(for c: PolicyCommand) -> Color {
         if c.risk != nil { return Palette.danger }
         if c.whitelisted == true { return Palette.ok }
         return Palette.warn
+    }
+
+    @ViewBuilder
+    private func commandBreakdown(_ cmds: [PolicyCommand]) -> some View {
+        let rows = VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(cmds.enumerated()), id: \.offset) { _, c in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Circle().fill(color(for: c)).frame(width: 7, height: 7)
+                    if let op = c.op, !op.isEmpty {
+                        Text(op).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                    Text(c.raw)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .lineLimit(compact ? 2 : 4)
+                        .truncationMode(.middle)
+                    if c.nested == true {
+                        Text("嵌套").font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        rows
     }
 
     // MARK: transfer & forward
@@ -136,8 +197,8 @@ struct CodeBox: View {
                 .padding(8)
         }
         .frame(maxHeight: maxHeight)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.white.opacity(0.11), lineWidth: 1))
     }
 }
 
@@ -160,7 +221,6 @@ struct DiffBox: View {
             .textSelection(.enabled)
         }
         .frame(maxHeight: maxHeight)
-        .fixedSize(horizontal: false, vertical: true)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08)))
     }
 

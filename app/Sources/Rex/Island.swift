@@ -49,6 +49,8 @@ final class IslandController {
     private var mouseMonitors: [Any] = []
 
     static let expandedWidth: CGFloat = 600
+    /// Max scrollable body height so approve/reject buttons stay on screen.
+    static let expandedBodyMaxHeight: CGFloat = 360
     // The panel has a fixed size large enough for the expanded island; it is
     // never resized (resizing a window from SwiftUI size changes loops
     // AppKit's constraint pass). Transparent parts let clicks through because
@@ -321,6 +323,13 @@ private struct SizeKey: PreferenceKey {
     }
 }
 
+private struct ScrollContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// The shape of the notch: square top, rounded bottom.
 struct NotchShape: Shape {
     var radius: CGFloat
@@ -340,6 +349,7 @@ struct IslandRootView: View {
     let state: AppState
     @Bindable var model: IslandModel
     let controller: IslandController
+    @State private var pendingBodyHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -451,9 +461,22 @@ struct IslandRootView: View {
                     }
                     DeadlineRing(request: r)
                 }
-                RequestBody(request: r, compact: true)
+                let bodyHeight = min(max(pendingBodyHeight, 1), IslandController.expandedBodyMaxHeight)
+                ScrollView(.vertical, showsIndicators: bodyHeight >= IslandController.expandedBodyMaxHeight - 1) {
+                    RequestBody(request: r, compact: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: ScrollContentHeightKey.self, value: geo.size.height)
+                            }
+                        }
+                }
+                .frame(height: bodyHeight)
+                .onPreferenceChange(ScrollContentHeightKey.self) { pendingBodyHeight = $0 }
+                .onChange(of: r.id) { pendingBodyHeight = 0 }
                 DecisionBar(request: r, state: state, armedAt: model.armedAt[r.id] ?? .distantPast,
                             onRejectFocus: { controller.focusForTyping() })
+                    .padding(.top, 4)
                     .id(r.id)
             }
         } else if let n = state.notice {
